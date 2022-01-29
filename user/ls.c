@@ -56,7 +56,7 @@ ls(char *path)
     *p++ = '/';
     while(read(fd, &de, sizeof(de)) == sizeof(de)){
       if(de.inum == 0)
-        continue;
+      continue;
       memmove(p, de.name, DIRSIZ);
       p[DIRSIZ] = 0;
       if(stat(buf, &st) < 0){
