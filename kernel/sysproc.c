@@ -104,3 +104,12 @@ sys_trace(void)
   myproc()->traced = flag;
   return 0;
 }
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 usysif;
+  if(argaddr(0, &usysif) < 0)
+      return -1;
+  return sysinfo(usysif);
+}

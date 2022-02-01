@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sysinfo.h"
 
 struct cpu cpus[NCPU];
 
@@ -130,6 +131,21 @@ found:
   return p;
 }
 
+// count the no-unused process
+// added for sysinfo
+uint64
+getnproc(){
+  uint64 nproc;
+  nproc = 0;
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED)
+      nproc++;
+    release(&p->lock);
+  }
+  return nproc;
+}
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
@@ -693,4 +709,19 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// collet system info
+// addr is a user virtual address of a struct sysinfo
+int
+sysinfo(uint64 addr)
+{
+  struct proc *p = myproc();
+  struct sysinfo sysif;
+
+  sysif.freemem = getfreemem();
+  sysif.nproc   = getnproc();
+  if(copyout(p->pagetable, addr, (char *)&sysif, sizeof(sysif)) < 0)
+    return -1;
+  return 0;
 }
