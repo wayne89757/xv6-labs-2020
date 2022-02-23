@@ -121,6 +121,14 @@ found:
     return 0;
   }
 
+  // An proc kernel pagetable
+  // assume that it will always success
+  p->kpagetable = kvmcreate();
+  uint64 va = KSTACK((int) (p - proc));
+  uint64 pa = kvmpa(va);
+  mappages(p->kpagetable, va, PGSIZE, pa, PTE_R | PTE_W);
+  p->kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -139,6 +147,9 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if(p->kpagetable)
+    proc_freekpagetable(p->kpagetable);
+  p->kpagetable = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -193,6 +204,28 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+// Free a process's kernel page table, and free the
+// physical page it refers to.
+// do not free the kernel data
+void
+proc_freekpagetable(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte2 = pagetable[i];
+    if(pte2 & PTE_V){
+      pagetable_t pd1 = (pagetable_t)PTE2PA(pte2);
+      for(int j = 0; j < 512; j++) {
+        pte_t pte1 = pd1[j];
+        if(pte1 & PTE_V) {
+          kfree((void*)PTE2PA(pte1));
+        }
+      }
+      kfree((void*)pd1);
+    }
+  }
+  kfree((void*)pagetable);
 }
 
 // a user program that calls exec("/init")
@@ -473,16 +506,28 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // must switch to p->kpagetable before swtch()
+        // why?
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();
         c->proc = 0;
 
         found = 1;
       }
       release(&p->lock);
     }
+
+    if(found == 0) {
+      kvminithart();
+    }
+    
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();

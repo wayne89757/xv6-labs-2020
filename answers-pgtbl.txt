@@ -1,0 +1,11 @@
+Print a page table
+
+page 0 contains text, page 2 constains data.
+page 510 is trapframe and page 511 is trampoline,
+it can't be accessed when running in user mode.
+
+
+A kernel page table per process
+
+
+Simplify copyin/copyinstr
