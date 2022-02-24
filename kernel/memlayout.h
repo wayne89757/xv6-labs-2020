@@ -64,4 +64,6 @@
 //   ...
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
+
+// move TRAPFRAME under PLIC to avoid overlapping kernel address
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)

@@ -20,7 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
-
+extern char etext[];
 // initialize the proc table at boot time.
 void
 procinit(void)
@@ -113,6 +113,12 @@ found:
     return 0;
   }
 
+  p->kpagetable = proc_kpagetable(p);
+  if(p->kpagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -120,14 +126,6 @@ found:
     release(&p->lock);
     return 0;
   }
-
-  // An proc kernel pagetable
-  // assume that it will always success
-  p->kpagetable = kvmcreate();
-  uint64 va = KSTACK((int) (p - proc));
-  uint64 pa = kvmpa(va);
-  mappages(p->kpagetable, va, PGSIZE, pa, PTE_R | PTE_W);
-  p->kstack = va;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -206,26 +204,68 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+// Create a kernel pagetable copy for process
+// only map it's own kernel stack
+pagetable_t
+proc_kpagetable(struct proc * p)
+{
+  pagetable_t kpagetable;
+
+  kpagetable = kvmcreate();
+  if(kpagetable == 0)
+    return 0;
+
+  // kstack
+  uint64 va = KSTACK((int) (p - proc));
+  uint64 pa = kvmpa(va);
+  if(mappages(kpagetable, va, PGSIZE, pa, PTE_R | PTE_W) != 0)
+    goto bad;  
+
+  // uart registers
+  if(mappages(kpagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0)
+    goto bad;
+  
+  // virtio mmio disk interface
+  if(mappages(kpagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0)
+    goto bad;
+
+  // CLINT
+  // According to xv6 book, the lowest address is PLIC
+  // so not mapping CLINT in p->kpagetable
+  //if(mappages(kpagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W) != 0)
+    //panic("kvmcreate");
+
+  // PLIC
+  if(mappages(kpagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0)
+    goto bad;
+
+  // map kernel text executable and read-only.
+  if(mappages(kpagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) != 0)
+    goto bad;
+  
+  // map kernel data and the physical RAM we'll make use of.
+  if(mappages(kpagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0)
+    goto bad;
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if(mappages(kpagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0 )
+    goto bad;
+
+  return kpagetable;
+
+bad:
+  proc_freekpagetable(kpagetable);
+  return 0;
+}
+
 // Free a process's kernel page table, and free the
 // physical page it refers to.
 // do not free the kernel data
 void
 proc_freekpagetable(pagetable_t pagetable)
 {
-  for(int i = 0; i < 512; i++) {
-    pte_t pte2 = pagetable[i];
-    if(pte2 & PTE_V){
-      pagetable_t pd1 = (pagetable_t)PTE2PA(pte2);
-      for(int j = 0; j < 512; j++) {
-        pte_t pte1 = pd1[j];
-        if(pte1 & PTE_V) {
-          kfree((void*)PTE2PA(pte1));
-        }
-      }
-      kfree((void*)pd1);
-    }
-  }
-  kfree((void*)pagetable);
+  kvmfree(pagetable);
 }
 
 // a user program that calls exec("/init")
@@ -252,7 +292,12 @@ userinit(void)
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
+  uint64 pa = walkaddr(p->pagetable, (uint64)initcode);
   p->sz = PGSIZE;
+
+  // initcode calls exec, which calls copyin
+  // so we need to map initcode in kpagetable too
+  mappages(p->kpagetable, 0, PGSIZE, pa, PTE_W|PTE_R|PTE_X|PTE_U);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -279,8 +324,10 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    kvmcopyrange(p->pagetable, p->kpagetable, p->sz, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uvmunmap(p->kpagetable, PGROUNDUP(sz), (PGROUNDUP(p->sz)-PGROUNDUP(sz))/PGSIZE, 0);
   }
   p->sz = sz;
   return 0;
@@ -307,6 +354,9 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  
+  // copy pagetable to kpagetable
+  kvmcopy(p->pagetable, np->kpagetable, p->sz);
 
   np->parent = p;
 
@@ -524,10 +574,6 @@ scheduler(void)
       release(&p->lock);
     }
 
-    if(found == 0) {
-      kvminithart();
-    }
-    
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();

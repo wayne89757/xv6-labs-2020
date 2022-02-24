@@ -5,8 +5,6 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-#include "spinlock.h"
-#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -55,46 +53,13 @@ pagetable_t
 kvmcreate()
 {
   pagetable_t pagetable = (pagetable_t) kalloc();
+  if(pagetable == 0)
+    return 0;
   memset(pagetable, 0, PGSIZE);
-
-  // uart registers
-  //kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
-  if(mappages(pagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0)
-    panic("kvmcreate");
-
-  // virtio mmio disk interface
-  //kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-  if(mappages(pagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0)
-    panic("kvmcreate");
-
-  // CLINT
-  //kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-  if(mappages(pagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W) != 0)
-    panic("kvmcreate");
-
-  // PLIC
-  //kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-  if(mappages(pagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0)
-    panic("kvmcreate");
-
-  // map kernel text executable and read-only.
-  //kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-  if(mappages(pagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) != 0)
-    panic("kvmcreate");
-
-  // map kernel data and the physical RAM we'll make use of.
-  //kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-  if(mappages(pagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0)
-    panic("kvmcreate");
-
-  // map the trampoline for trap entry/exit to
-  // the highest virtual address in the kernel.
-  //kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
-  if(mappages(pagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0 )
-    panic("kvmcreate");
 
   return pagetable;
 }
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
@@ -348,6 +313,25 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+void
+kvmfree(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte2 = pagetable[i];
+    if(pte2 & PTE_V){
+      pagetable_t pd1 = (pagetable_t)PTE2PA(pte2);
+      for(int j = 0; j < 512; j++) {
+        pte_t pte1 = pd1[j];
+        if(pte1 & PTE_V) {
+          kfree((void*)PTE2PA(pte1));
+        }
+      }
+      kfree((void*)pd1);
+    }
+  }
+  kfree((void*)pagetable);
+}
+
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -382,6 +366,32 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+// copy user pagetable to kpagetable
+int 
+kvmcopyrange(pagetable_t old, pagetable_t new, uint64 va, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  for(i = PGROUNDUP(va); i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("kvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("kvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
+      return -1;
+  }
+  return 0;
+}
+
+int kvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  return kvmcopyrange(old, new, 0, sz);
 }
 
 // mark a PTE invalid for user access.
