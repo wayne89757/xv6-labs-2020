@@ -382,7 +382,7 @@ kvmcopyrange(pagetable_t old, pagetable_t new, uint64 va, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("kvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
+    flags = PTE_FLAGS(*pte) & ~PTE_U;
     if(mappages(new, i, PGSIZE, pa, flags) != 0)
       return -1;
   }
@@ -438,6 +438,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
+  return copyin_new(pagetable, dst, srcva, len);
   uint64 n, va0, pa0;
 
   while(len > 0){
@@ -464,6 +465,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
+  return copyinstr_new(pagetable, dst, srcva, max);
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -505,18 +507,18 @@ void
 vmprint(pagetable_t pagetable)
 {
   printf("page table %p\n", pagetable);
-
-  for(int i = 0; i < 512; i++) {
+  int npages = 512;
+  for(int i = 0; i < npages; i++) {
     pte_t pd = pagetable[i];
     if(pd & PTE_V) {
       pagetable_t pt = (void *)PTE2PA(pd);
       printf("..%d: pte %p pa %p\n", i, pd, pt);
-      for(int j = 0; j < 512; j++) {
+      for(int j = 0; j < npages; j++) {
         pte_t pd2 = pt[j];
         if(pd2 & PTE_V) {
           pagetable_t pt2 = (void *)PTE2PA(pd2);
           printf(".. ..%d: pte %p pa %p\n", j, pd2, pt2);
-          for(int k = 0; k < 512; k++) {
+          for(int k = 0; k < npages; k++) {
             pte_t pte = pt2[k];
             if(pte & PTE_V) {
               printf(".. .. ..%d: pte %p pa %p\n", k, pte, PTE2PA(pte));

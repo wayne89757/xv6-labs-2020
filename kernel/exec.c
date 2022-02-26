@@ -74,7 +74,8 @@ exec(char *path, char **argv)
   uvmclear(pagetable, sz-2*PGSIZE);
   sp = sz;
   stackbase = sp - PGSIZE;
-   
+
+  // if we simplify copyout, then we need handle kpagetable here
   kpagetable = proc_kpagetable(p);
   if(kpagetable == 0)
     goto bad;

@@ -292,12 +292,12 @@ userinit(void)
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
-  uint64 pa = walkaddr(p->pagetable, (uint64)initcode);
+  uint64 pa = walkaddr(p->pagetable, 0);
   p->sz = PGSIZE;
 
   // initcode calls exec, which calls copyin
   // so we need to map initcode in kpagetable too
-  mappages(p->kpagetable, 0, PGSIZE, pa, PTE_W|PTE_R|PTE_X|PTE_U);
+  mappages(p->kpagetable, 0, PGSIZE, pa, PTE_W|PTE_R|PTE_X);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -356,7 +356,7 @@ fork(void)
   np->sz = p->sz;
   
   // copy pagetable to kpagetable
-  kvmcopy(p->pagetable, np->kpagetable, p->sz);
+  kvmcopy(np->pagetable, np->kpagetable, p->sz);
 
   np->parent = p;
 

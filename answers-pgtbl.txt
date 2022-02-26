@@ -5,7 +5,9 @@ page 510 is trapframe and page 511 is trampoline,
 it can't be accessed when running in user mode.
 
 
-A kernel page table per process
-
-
 Simplify copyin/copyinstr
+
+srcva+len may overflow and copy the data which is not owned by current process.
+make srcva = p->sz - 1, len = (uint64)-1, then it will 
+pass the first two, but fail the third test.
+
