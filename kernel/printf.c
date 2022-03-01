@@ -132,3 +132,14 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace()
+{
+  uint64 *fp,  *stop;
+  
+  printf("backtrace:\n");
+  stop = (uint64 *)(myproc()->kstack + PGSIZE);
+  for(fp = (uint64 *)r_fp(); fp != stop; fp = (uint64 *)*(fp - 2)) {
+    printf("%p\n", *(fp - 1));
+  }
+}

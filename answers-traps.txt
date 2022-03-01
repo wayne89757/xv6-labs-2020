@@ -1,0 +1,14 @@
+1.  a0-a7, a2
+
+2.  It didn't call, instead main inline f and f inline g.
+
+3.  0x34 jalr.
+    Maybe 0x0 + 638, i'm not familiar with riscv ISA
+
+4.  ...
+
+5.  He110 World
+    0x726c6400
+    Nope, the compiler will interpret it in the right way.
+
+6.  It print the decimal value of a2, since the fmt expects two int argument but only gets one.
