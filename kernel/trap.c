@@ -77,8 +77,25 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    // yield first or later doesn't matter, I think.
     yield();
+    if(p->alarm != 0){
+      p->ticks++;
+      if(p->ticks == p->interval){
+        // disable for now to avoid reentrain handler.
+        // sigreturn should enable it again.
+        p->alarm = 0;
+
+        *(p->trapframe + 1)= *p->trapframe;
+
+        // configure to call handler
+        p->trapframe->epc = p->handler;
+
+        p->ticks = 0;
+      }
+    }
+  }
 
   usertrapret();
 }
