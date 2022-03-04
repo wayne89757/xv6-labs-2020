@@ -50,8 +50,9 @@ sys_sbrk(void)
   addr = p->sz;
   if(addr + n < 0)
     return -1;
+  if(n < 0 && growproc(n) < 0)
+    return -1;
   p->sz += n;
-
   return addr;
 }
 

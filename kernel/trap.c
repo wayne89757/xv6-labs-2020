@@ -67,9 +67,23 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 13 || r_scause() == 15) && r_stval() < p->sz) {
+  } else if(r_scause() == 13 || r_scause() == 15) {
     uint64 va, pa;
     va = r_stval();
+
+    // va should within p->sz
+    if( va >= p->sz){
+      printf("usertrap(): invalid user address\n");
+      p->killed = 1;
+      goto kill;
+    }
+    //check for guard page under user stack
+    pte_t * pte = walk(p->pagetable, va, 1);
+    if( (*pte & PTE_V) && (*pte & PTE_U) == 0){
+      printf("usertrap(): aceess user guard page\n");
+      p->killed = 1;
+      goto kill;
+    }
     pa = (uint64)kalloc();
     if(pa == 0){
       p->killed = 1;
@@ -87,6 +101,7 @@ usertrap(void)
     p->killed = 1;
   }
 
+kill:
   if(p->killed)
     exit(-1);
 
