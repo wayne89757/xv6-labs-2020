@@ -68,6 +68,44 @@ int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
+  uint64 va = *ip;
+  struct proc * p = myproc();
+
+  // This works since the ip actually will pass to 
+  // copyin/copyout as the argument va, where walkaddr
+  // will translate it into pa. It's equivalent to do
+  // allocation in either place.
+  
+  // However, it's unresonable to modify the user pagetable
+  // in a funciton that is used to extract pointer arguments
+  // from user system call.
+  if(va >= p->sz) {
+    printf("argaddr(): access invalid address\n");
+    return -1;
+  }
+  
+  pte_t * pte = walk(p->pagetable, va, 1);
+  if(pte == 0){
+    printf("argaddr(): out of memory\n");
+    return -1;
+  }
+
+  if( *pte & (PTE_V | PTE_U))
+    return 0;
+
+  if( (*pte & PTE_V) && (*pte & PTE_U) == 0){
+    printf("argaddr(): access user guard page\n");
+    return -1;
+  }
+  
+  uint64 pa = (uint64)kalloc();
+  if(pa == 0){
+    printf("argaddr(): no free memory\n");
+    return -1;
+  }
+  memset((void *)pa, 0, PGSIZE);
+  uint64 flags = PTE_U | PTE_V | PTE_R | PTE_W | PTE_X;
+  *pte = PA2PTE(pa) | flags;
   return 0;
 }
 

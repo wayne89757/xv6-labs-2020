@@ -73,27 +73,33 @@ usertrap(void)
 
     // va should within p->sz
     if( va >= p->sz){
-      printf("usertrap(): invalid user address\n");
+      //printf("usertrap(): invalid user address\n");
       p->killed = 1;
       goto kill;
     }
     //check for guard page under user stack
     pte_t * pte = walk(p->pagetable, va, 1);
+    if(pte == 0)
+      exit(0);
     if( (*pte & PTE_V) && (*pte & PTE_U) == 0){
-      printf("usertrap(): aceess user guard page\n");
+      //printf("usertrap(): access user guard page\n");
       p->killed = 1;
       goto kill;
     }
     pa = (uint64)kalloc();
     if(pa == 0){
-      p->killed = 1;
+      //p->killed = 1;
+      exit(0);
     } else {
       memset((void *)pa, 0, PGSIZE);
+      *pte = PA2PTE(pa) | PTE_U | PTE_V | PTE_R | PTE_W | PTE_X;
+      /*
       va = PGROUNDDOWN(va);
       if(mappages(p->pagetable, va, PGSIZE, pa, PTE_U|PTE_W|PTE_R) != 0) {
         kfree((void *)pa);
         p->killed = 1;
       }
+      */
     }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
