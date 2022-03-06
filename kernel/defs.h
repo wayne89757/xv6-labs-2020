@@ -64,7 +64,6 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 void            duppage(uint64);
-void            closepage(uint64);
 int             refspage(uint64);
 
 // log.c

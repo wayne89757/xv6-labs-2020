@@ -121,19 +121,6 @@ duppage(uint64 pa)
   release(&kmem.lock);
 }
 
-void
-closepage(uint64 pa)
-{
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("closepage(): invalid pa");
-  int idx = PAX(pa);
-  //acquire(&kmem.lock);
-  mref[idx]--;
-  if(mref[idx] == 0)
-    kfree((void*)pa);
-  //release(&kmem.lock);
-}
-
 int
 refspage(uint64 pa)
 {

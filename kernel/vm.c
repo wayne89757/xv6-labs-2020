@@ -136,6 +136,7 @@ cowwalk(pagetable_t pagetable, uint64 va)
 
     flags = (PTE_FLAGS(*pte) & ~PTE_C) | PTE_W;
     // this way to save one page alloc and copy
+    // copy before kfree, so the page won't be freed before kfree here 
     if(refspage(pa) == 1){
       *pte = (*pte & ~PTE_C) | flags;
       return pte;
@@ -147,6 +148,8 @@ cowwalk(pagetable_t pagetable, uint64 va)
     *pte = PA2PTE(mem) | flags;
     // within the gap between refspage and closepage
     // there maybe other process realease this page too.
+    // so we must do check if we need to free it in the kfree, since
+    // we kmem.lock is not reentraintlock
     kfree((void*)pa);
     
   } else if (*pte & PTE_W){
@@ -395,7 +398,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
-#define DEBUG 1
 // cow uvmcopy
 int 
 cowuvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
@@ -421,7 +423,6 @@ cowuvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 #endif
       if(mappages(new, i, PGSIZE, pa, flags) != 0)
         goto err;
-      duppage(pa);
     } else if (flags & PTE_C) {
       // cow page
 #ifdef DEBUG
@@ -430,14 +431,12 @@ cowuvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 #endif
       if(mappages(new, i, PGSIZE, pa, flags) != 0)
         goto err;
-      duppage(pa);
     } else if (flags & PTE_W) {
       // clear PTE_W, make it a cow page
       flags = (flags & ~PTE_W) | PTE_C;
       if(mappages(new, i, PGSIZE, pa, flags) != 0)
         goto err;
       *pte = PA2PTE(pa) | flags;
-      duppage(pa);
     } else {
       // non-wirteable page, make it a shared page
       // guard page should be share too
@@ -445,9 +444,8 @@ cowuvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       if(mappages(new, i, PGSIZE, pa, flags) != 0)
         goto err;
       *pte = *pte | PTE_S;
-      duppage(pa);
     }
-    //duppage(pa); 
+    duppage(pa); 
   }
   return 0;
 
