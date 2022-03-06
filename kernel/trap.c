@@ -65,6 +65,14 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 13 || r_scause() == 15){
+    // walkaddr check va, alloc and map it if leagal
+    uint64 va = r_stval();
+    uint64 pa = walkaddr(p->pagetable, va);
+    if(pa == 0){
+      //printf("usertrap(): walkaddr");
+      exit(-1);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
