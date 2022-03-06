@@ -47,6 +47,7 @@
 #define KERNBASE 0x80000000L
 #define PHYSTOP (KERNBASE + 128*1024*1024)
 #define NPAGE ((128*1024*1024)/(PGSIZE))
+#define PAX(pa) (((uint64)(pa)>>12) & (NPAGE-1))
 
 // map the trampoline page to the highest address,
 // in both user and kernel space.

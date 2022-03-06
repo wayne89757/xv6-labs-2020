@@ -23,11 +23,22 @@ struct {
   struct run *freelist;
 } kmem;
 
+// need lock
+int mref[NPAGE]; //pages references counter
+
+void refinit()
+{
+  int i;
+  for(i = 0; i<NPAGE; i++)
+    mref[i] = 1;
+}
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  refinit();
   freerange(end, (void*)PHYSTOP);
+  //memset((void *)mref, 0, sizeof mref);
 }
 
 void
@@ -50,13 +61,25 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+  
+  // only free when the ref equals 1
+  int idx = PAX(pa); 
 
+  acquire(&kmem.lock);
+  if(mref[idx] == 0)
+    panic("kfree(): zero ref");
+  // hold by other process
+  if(mref[idx] > 1) {
+    mref[idx]--;
+    release(&kmem.lock);
+    return;
+  }
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
+  //acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
@@ -72,11 +95,26 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    // the first process hold it from kalloc
+    mref[PAX(r)] = 1;
+  }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+// increase page ref for shared or cow page
+void duppage(void *pa){
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("duppage(): invalid pa");
+  int idx = PAX(pa);
+  acquire(&kmem.lock);
+  if(mref[idx] == 0)
+    panic("duppage(): dup free page");
+  mref[idx]++;
+  release(&kmem.lock);
 }
