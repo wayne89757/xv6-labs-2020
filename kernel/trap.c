@@ -65,6 +65,13 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 15) {
+    // store page fault, caused by cow page
+    uint64 va = r_stval();
+    if(cowwalkaddr(myproc()->pagetable, va) == 0){
+      p->killed = 1;
+      printf("usertrap(): not a cow page fault\n");
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

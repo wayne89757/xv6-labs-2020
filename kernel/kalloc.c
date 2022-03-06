@@ -108,13 +108,41 @@ kalloc(void)
 }
 
 // increase page ref for shared or cow page
-void duppage(uint64 pa){
+void
+duppage(uint64 pa)
+{
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("duppage(): invalid pa");
   int idx = PAX(pa);
   acquire(&kmem.lock);
-  if(mref[idx] == 0)
+  if(mref[idx] <= 0)
     panic("duppage(): dup free page");
   mref[idx]++;
   release(&kmem.lock);
+}
+
+void
+closepage(uint64 pa)
+{
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("closepage(): invalid pa");
+  int idx = PAX(pa);
+  //acquire(&kmem.lock);
+  mref[idx]--;
+  if(mref[idx] == 0)
+    kfree((void*)pa);
+  //release(&kmem.lock);
+}
+
+int
+refspage(uint64 pa)
+{
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("closepage(): invalid pa");
+  int idx = PAX(pa);
+  int refs;
+  //acquire(&kmem.lock);
+  refs = mref[idx];
+  //release(&kmem.lock);
+  return refs;
 }

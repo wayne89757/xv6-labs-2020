@@ -111,6 +111,64 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+// higher level walk to handle the cow page
+pte_t*
+cowwalk(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa, mem, flags;
+  
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  // invalid address
+  if(pte == 0 || (*pte & PTE_V) == 0)
+    return 0;
+  // invalid
+  if((*pte & PTE_U) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+  // cow page, remember clear PTE_C and add PTE_W 
+  if(*pte & PTE_C){
+    if(*pte & PTE_W)
+      panic("cowwalk: writeable cow page");
+
+    flags = (PTE_FLAGS(*pte) & ~PTE_C) | PTE_W;
+    // this way to save one page alloc and copy
+    if(refspage(pa) == 1){
+      *pte = (*pte & ~PTE_C) | flags;
+      return pte;
+    }
+    mem = (uint64)kalloc();
+    if(mem == 0)
+      return 0;
+    memmove((char*)mem, (char*)pa, PGSIZE);
+    *pte = PA2PTE(mem) | flags;
+    // within the gap between refspage and closepage
+    // there maybe other process realease this page too.
+    kfree((void*)pa);
+    
+  } else if (*pte & PTE_W){
+    ;
+  } else {
+    return 0;
+  }
+  return pte;
+}
+
+// just a wrap of cowwalk, return pa or 0 on error
+// only success on writeable page
+uint64
+cowwalkaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t * pte = cowwalk(pagetable, va);
+  if(pte == 0)
+    return 0;
+  else
+    return PTE2PA(*pte);
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
@@ -299,6 +357,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -419,7 +478,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    pa0 = cowwalkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
