@@ -308,6 +308,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
+  return cowuvmcopy(old, new, sz);
   pte_t *pte;
   uint64 pa, i;
   uint flags;
@@ -332,6 +333,66 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+
+#define DEBUG 1
+// cow uvmcopy
+int 
+cowuvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  for(i = 0; i < sz; i += PGSIZE) {
+    if((pte = walk(old, i, 0)) == 0)
+      panic("cowuvmcopy: pte should exist");
+    flags = PTE_FLAGS(*pte);
+    // check valid
+    if((flags & PTE_V) == 0)
+      panic("cowuvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    
+    if(flags & PTE_S) {
+      // shared page
+#ifdef DEBUG
+      if(flags & PTE_C)
+        panic("cowuvmcopy: shared a cow page");
+#endif
+      if(mappages(new, i, PGSIZE, pa, flags) != 0)
+        goto err;
+      duppage(pa);
+    } else if (flags & PTE_C) {
+      // cow page
+#ifdef DEBUG
+      if(flags & PTE_W)
+        panic("cowuvmcopy: PTE_W for a cow page");
+#endif
+      if(mappages(new, i, PGSIZE, pa, flags) != 0)
+        goto err;
+      duppage(pa);
+    } else if (flags & PTE_W) {
+      // clear PTE_W, make it a cow page
+      flags = (flags & ~PTE_W) | PTE_C;
+      if(mappages(new, i, PGSIZE, pa, flags) != 0)
+        goto err;
+      *pte = PA2PTE(pa) | flags;
+      duppage(pa);
+    } else {
+      // non-wirteable page, make it a shared page
+      // guard page should be share too
+      flags = flags | PTE_S;
+      if(mappages(new, i, PGSIZE, pa, flags) != 0)
+        goto err;
+      *pte = *pte | PTE_S;
+      duppage(pa);
+    }
+    //duppage(pa); 
+  }
+  return 0;
+
+ err:
   return -1;
 }
 

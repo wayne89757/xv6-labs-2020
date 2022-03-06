@@ -108,7 +108,7 @@ kalloc(void)
 }
 
 // increase page ref for shared or cow page
-void duppage(void *pa){
+void duppage(uint64 pa){
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("duppage(): invalid pa");
   int idx = PAX(pa);
