@@ -1,0 +1,4 @@
+when we insert two new key in the same bucket in different threads, 
+it may happens that both insert get the same argument,
+and the one insert first will be overwrite by the slow one,
+which cause the first one missing in get.
