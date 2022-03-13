@@ -23,15 +23,17 @@
 #include "fs.h"
 #include "buf.h"
 
+#define NBUCKET 103 
+
 struct {
   struct spinlock lock;
   struct buf buf[NBUF];
-
-  // Linked list of all buffers, through prev/next.
-  // Sorted by how recently the buffer was used.
-  // head.next is most recent, head.prev is least.
-  struct buf head;
 } bcache;
+
+struct {
+  struct buf* next;
+  struct spinlock lock;
+} table[NBUCKET];
 
 void
 binit(void)
@@ -40,51 +42,96 @@ binit(void)
 
   initlock(&bcache.lock, "bcache");
 
-  // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+  }
+
+  for(int i = 0; i < NBUCKET; i++) {
+    initlock(&table[i].lock, "bcache");
   }
 }
 
-// Look through buffer cache for block on device dev.
-// If not found, allocate a buffer.
-// In either case, return locked buffer.
 static struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf *b;
+  int key = blockno % NBUCKET;
 
-  acquire(&bcache.lock);
-
-  // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
+  acquire(&table[key].lock);
+  for(b = table[key].next; b != 0; b = b->next) {
+    if(b->dev == dev && b->blockno == blockno) {
       b->refcnt++;
-      release(&bcache.lock);
+      release(&table[key].lock);
       acquiresleep(&b->lock);
       return b;
     }
   }
 
   // Not cached.
-  // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
+  acquire(&bcache.lock);
+  for(b = bcache.buf; b < bcache.buf + NBUF; b++) { 
+    // precheck to avoid acquire lock of a in-use buf
+    if(b->refcnt != 0) continue;
+    int oldkey = b->blockno % NBUCKET;
+    
+    // need no more lock, just modify the buf 
+    if(b->blockno == 0 || oldkey == key) {
+      // use for the first time, put it into hash table
+      // do this before b->blockno modified
+      if(b->blockno == 0){
+        // oldkey is invalid for a buf never used
+        b->next = table[key].next;
+        table[key].next = b; 
+      }
+      // otherwise, the buf is already in right bucket
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
       b->refcnt = 1;
+
       release(&bcache.lock);
+      release(&table[key].lock);
       acquiresleep(&b->lock);
       return b;
     }
+    
+    // we need another bucket lock
+    // check refcnt after acquire the lock, since
+    // the refcnt may be changed by other threads
+    acquire(&table[oldkey].lock);
+    if(b->refcnt != 0){
+      release(&table[oldkey].lock);
+      continue;
+    }
+    b->dev = dev;
+    b->blockno = blockno;
+    b->valid = 0;
+    b->refcnt = 1; 
+
+    // move the buf from table[oldkey] to table[key]
+    struct buf *pre;
+    if(table[oldkey].next == b)
+      table[oldkey].next = b->next;
+    else{
+    for(pre = table[oldkey].next; pre != 0; pre = pre->next) {
+      if(pre->next == b){
+        pre->next = b->next;
+        break;
+      }
+    }
+    }
+    b->next = table[key].next;
+    table[key].next = b;
+     
+    release(&table[oldkey].lock);
+    release(&bcache.lock);
+    release(&table[key].lock);
+
+    acquiresleep(&b->lock);
+    return b;
   }
+  // remember to release all lock in every branch
+  release(&bcache.lock);
   panic("bget: no buffers");
 }
 
@@ -120,34 +167,25 @@ brelse(struct buf *b)
     panic("brelse");
 
   releasesleep(&b->lock);
-
-  acquire(&bcache.lock);
-  b->refcnt--;
-  if (b->refcnt == 0) {
-    // no one is waiting for it.
-    b->next->prev = b->prev;
-    b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-  }
   
-  release(&bcache.lock);
+  int key = b->blockno % NBUCKET;
+  acquire(&table[key].lock);
+  b->refcnt--;
+  release(&table[key].lock);
 }
 
 void
 bpin(struct buf *b) {
-  acquire(&bcache.lock);
+  int key = b->blockno % NBUCKET;
+  acquire(&table[key].lock);
   b->refcnt++;
-  release(&bcache.lock);
+  release(&table[key].lock);
 }
 
 void
 bunpin(struct buf *b) {
-  acquire(&bcache.lock);
+  int key = b->blockno % NBUCKET;
+  acquire(&table[key].lock);
   b->refcnt--;
-  release(&bcache.lock);
+  release(&table[key].lock);
 }
-
-
