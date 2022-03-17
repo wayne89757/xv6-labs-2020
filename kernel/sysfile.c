@@ -283,9 +283,122 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+// caller is wrapped in transaction
+// return the locked inode on success, 0 on failuer
+struct inode*
+desymlink(char * path, int ttl)
+{
+  char target[MAXPATH];
+  int n;
+  struct inode *ip;
+
+  if(ttl == 0)
+    return 0;
+
+  //target doesn't exist, return 0
+  if((ip = namei(path)) == 0){
+    return 0;
+  }
+  
+  ilock(ip);
+  // recusively find the target
+  if(ip->type != T_SYMLINK) {
+    return ip;
+  }
+
+  if((n = readi(ip, 0, (uint64)target, 0, ip->size)) != ip->size)
+    panic("desymlink: readi");
+  iunlockput(ip);
+
+  return desymlink(target, ttl-1);
+}
+
+uint64
+sys_open_new(void)
+{
+  char path[MAXPATH], target[MAXPATH];
+  int fd, omode;
+  struct file *f;
+  struct inode *ip;
+  int n;
+
+  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
+    return -1;
+
+  begin_op();
+
+  if(omode & O_CREATE){
+    ip = create(path, T_FILE, 0, 0);
+    if(ip == 0){
+      end_op();
+      return -1;
+    }
+  } else {
+    if((ip = namei(path)) == 0){
+      end_op();
+      return -1;
+    }
+    ilock(ip);
+    if(ip->type == T_DIR && omode != O_RDONLY){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    // recusively find the target spcified by symbolic link
+    // when O_NOFOLLOW not set
+    else if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+      n = readi(ip, 0, (uint64)target, 0, ip->size);
+      if(n != ip->size)
+        panic("sys_open_new: readi");
+
+      iunlockput(ip);
+      // target does't exist or cycle
+      if( (ip = desymlink(target, 9)) == 0) {
+        end_op();
+        return -1;
+      }
+    }
+  }
+
+  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+    if(f)
+      fileclose(f);
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  if(ip->type == T_DEVICE){
+    f->type = FD_DEVICE;
+    f->major = ip->major;
+  } else {
+    f->type = FD_INODE;
+    f->off = 0;
+  }
+  f->ip = ip;
+  f->readable = !(omode & O_WRONLY);
+  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+
+  if((omode & O_TRUNC) && ip->type == T_FILE){
+    itrunc(ip);
+  }
+
+  iunlock(ip);
+  end_op();
+
+  return fd;
+}
+
 uint64
 sys_open(void)
 {
+  return sys_open_new();
   char path[MAXPATH];
   int fd, omode;
   struct file *f;
@@ -485,9 +598,64 @@ sys_pipe(void)
   return 0;
 }
 
+// symlink(char *target, char *path)
+// 0 on success, failure on -1
 uint64
 sys_symlink(void)
 {
-  
+  char name[DIRSIZ], path[MAXPATH], target[MAXPATH];
+  struct inode *ip, *dp;
+  int n;
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  // parent doesn't exist, return -1
+  if((dp = nameiparent(path, name)) == 0)
+    goto err;
+
+  ilock(dp);
+
+  // path already exists, return -1
+  if((ip = dirlookup(dp, name, 0)) != 0) {
+    iunlockput(dp);
+    goto err;
+  }
+
+  // though create panic on ialloc failure
+  // the syscall should return -1, I guess
+  if((ip = ialloc(dp->dev, T_SYMLINK)) == 0) {
+    panic("sys_symlink: ialloc");
+    iunlockput(dp);
+    goto err;
+  }
+
+  // since ip is new, no other process could hold it's lock
+  // so it's safe to acquire it's lock here
+  ilock(ip);
+  ip->nlink = 1;
+
+  // write target to data block
+  // it doesn't matter whether target exists or not
+  n = strlen(target) + 1;
+  if(writei(ip, 0, (uint64)target, 0, n) != n){
+    panic("sys_symlink: writei");
+  }
+
+  iupdate(ip);
+  iunlockput(ip);
+
+  // link the symbolic inode to parent dp
+  if(dirlink(dp, name, ip->inum) < 0) {
+    panic("sys_symlink: dirlink");
+  }
+
+  iunlockput(dp);
+  end_op();
+
   return 0;
+
+err:
+  end_op();
+  return -1;
 }
